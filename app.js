@@ -152,10 +152,12 @@ app.post('/whatsapp/leads/insert', async (req, res) => {
 // ===== Levantar servidor =====
 // ===== Levantar servidor =====
 const listenPort = Number(process.env.PORT || 3000);
-const listenHost = '0.0.0.0'; // ¡clave en Railway!
+const listenHost = '0.0.0.0'; // importante en Railway
 
 console.log('[BOOT] PORT env =', process.env.PORT);
 
 app.listen(listenPort, listenHost, () => {
   console.log(`[BOOT] API listening on http://${listenHost}:${listenPort}`);
 });
+
+
