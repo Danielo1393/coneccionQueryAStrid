@@ -9,16 +9,16 @@ app.use(express.json());
 
 // ===== Variables de entorno =====
 const {
-  SQL_SERVER,                     // ej: "mi-servidor" o "mi-servidor.database.windows.net" o IP
-  SQL_DATABASE = 'RPA',
+  SQL_SERVER,                     // ej: "mi-servidor.database.windows.net" o IP
+  SQL_DATABASE = 'RPA',           // <— por defecto RPA
   SQL_USER,
   SQL_PASSWORD,
-  SQL_ENCRYPT = 'false',           // "true" para usar TLS (Azure lo requiere)
+  SQL_ENCRYPT = 'false',          // "true" para usar TLS (Azure lo requiere)
   SQL_TRUST_CERT = 'true',        // on-prem sin CA: "true" | Azure: "false"
   SQL_TLS_MIN = 'TLSv1',          // compatibilidad: 'TLSv1' | recomendado: 'TLSv1.2'
-  SQL_TLS_MAX = 'TLSv1.2',        // tope: 'TLSv1.2' (ajusta si tu servidor solo llega a 1.0/1.1)
+  SQL_TLS_MAX = 'TLSv1.2',        // tope: 'TLSv1.2'
   API_KEY,                        // clave del header x-api-key
-  PORT = 3000
+  PORT = 3000                     // no se usa directamente; Railway inyecta process.env.PORT
 } = process.env;
 
 // ===== Pool SQL (lazy) =====
@@ -53,9 +53,12 @@ function parseFecha(s) {
   // Acepta "yyyy-MM-dd HH:mm:ss" o ISO "yyyy-MM-ddTHH:mm:ss"
   const iso = s.includes('T') ? s : s.replace(' ', 'T');
   const d = new Date(iso);
-  if (isNaN(d)) throw new Error('FECHA_HORA inválida. Usa ISO (2025-09-12T15:30:00) o "yyyy-MM-dd HH:mm:ss".');
+  if (isNaN(d)) {
+    throw new Error('FECHA_HORA inválida. Usa ISO (2025-09-12T15:30:00) o "yyyy-MM-dd HH:mm:ss".');
+  }
   return d;
 }
+
 
 // ===== Rutas básicas =====
 app.get('/', (req, res) => {
@@ -75,6 +78,20 @@ app.get('/db-health', async (req, res) => {
     console.error('DB Health error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// ===== Endpoint de depuración de variables (quitar en producción si quieres) =====
+app.get('/env-check', (req, res) => {
+  res.json({
+    SQL_SERVER: !!process.env.SQL_SERVER,
+    SQL_DATABASE: process.env.SQL_DATABASE,
+    SQL_USER: !!process.env.SQL_USER,
+    SQL_PASSWORD: !!process.env.SQL_PASSWORD,
+    SQL_ENCRYPT: process.env.SQL_ENCRYPT,
+    SQL_TRUST_CERT: process.env.SQL_TRUST_CERT,
+    SQL_TLS_MIN: process.env.SQL_TLS_MIN,
+    SQL_TLS_MAX: process.env.SQL_TLS_MAX
+  });
 });
 
 // ===== Insert en dbo.Leads_Whatsapp =====
@@ -150,7 +167,6 @@ app.post('/whatsapp/leads/insert', async (req, res) => {
 });
 
 // ===== Levantar servidor =====
-// ===== Levantar servidor =====
 const listenPort = Number(process.env.PORT || 3000);
 const listenHost = '0.0.0.0'; // importante en Railway
 
@@ -159,5 +175,3 @@ console.log('[BOOT] PORT env =', process.env.PORT);
 app.listen(listenPort, listenHost, () => {
   console.log(`[BOOT] API listening on http://${listenHost}:${listenPort}`);
 });
-
-
