@@ -10,7 +10,7 @@ app.use(express.json());
 // ===== Variables de entorno =====
 const {
   SQL_SERVER,                     // ej: "mi-servidor.database.windows.net" o IP
-  SQL_DATABASE = 'RPA',           // nombre de tu BD (por defecto RPA)
+  SQL_DATABASE,           // nombre de tu BD (por defecto RPA)
   SQL_USER,
   SQL_PASSWORD,
   SQL_ENCRYPT = 'false',          // "true" si tu SQL requiere TLS
