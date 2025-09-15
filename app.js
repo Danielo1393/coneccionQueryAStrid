@@ -9,32 +9,29 @@ app.use(express.json());
 
 // ===== Variables de entorno =====
 const {
-  SQL_SERVER,                     // ej: "mi-servidor.database.windows.net" o IP
-  SQL_DATABASE,           // nombre de tu BD (por defecto RPA)
+  SQL_SERVER,                     // ej: "mi-servidor" o "mi-servidor.database.windows.net" o IP
+  SQL_DATABASE = 'RPA',           // usa el nombre real de tu BD; el env lo sobrescribe
   SQL_USER,
   SQL_PASSWORD,
-  SQL_ENCRYPT = 'false',          // "true" si tu SQL requiere TLS
-  SQL_TRUST_CERT = 'true',        // on-prem sin CA pública: "true" (Azure suele ser "false")
-  SQL_TLS_MIN = 'TLSv1',          // compatibilidad mínima
-  SQL_TLS_MAX = 'TLSv1.2',        // tope
-  API_KEY,
-  PORT = 3000                     // solo por fallback local; en Railway se ignora
+  SQL_ENCRYPT = 'true',           // "true" para usar TLS (Azure lo requiere)
+  SQL_TRUST_CERT = 'true',        // on-prem sin CA: "true" | Azure: "false"
+  SQL_TLS_MIN = 'TLSv1',
+  SQL_TLS_MAX = 'TLSv1.2',
+  API_KEY                          // clave para header x-api-key
 } = process.env;
 
-// === Sanity-check de env (sin exponer secretos) ===
-[
-  'SQL_SERVER','SQL_DATABASE','SQL_USER','SQL_PASSWORD',
-  'SQL_ENCRYPT','SQL_TRUST_CERT','SQL_TLS_MIN','SQL_TLS_MAX','API_KEY'
-].forEach(k => {
-  const v = process.env[k];
-  if (!v || String(v).trim() === '') {
-    console.error('[ENV] Missing or empty:', k);
-  } else {
-    const len = String(v).length;
-    const sample = k === 'SQL_SERVER' ? String(v).slice(0, 20) : undefined;
-    console.log('[ENV] OK:', k, 'len=', len, sample ? `sample=${sample}` : '');
-  }
-});
+// === Sanity-check de env (sin exponer secretos)
+['SQL_SERVER','SQL_DATABASE','SQL_USER','SQL_PASSWORD','SQL_ENCRYPT','SQL_TRUST_CERT','SQL_TLS_MIN','SQL_TLS_MAX','API_KEY']
+  .forEach(k => {
+    const v = process.env[k];
+    if (!v || String(v).trim() === '') {
+      console.error('[ENV] Missing or empty:', k);
+    } else {
+      const len = String(v).length;
+      const sample = k === 'SQL_SERVER' ? String(v).slice(0, 20) : undefined;
+      console.log('[ENV] OK:', k, 'len=', len, sample ? `sample=${sample}` : '');
+    }
+  });
 
 // ===== Pool SQL (lazy) =====
 let poolPromise = null;
@@ -48,10 +45,10 @@ function getPool() {
       options: {
         encrypt: SQL_ENCRYPT === 'true',
         trustServerCertificate: SQL_TRUST_CERT === 'true',
-        // Compatibilidad TLS para servidores antiguos (evita ERR_SSL_UNSUPPORTED_PROTOCOL)
+        // Compatibilidad TLS para servidores antiguos
         cryptoCredentialsDetails: {
-          minVersion: SQL_TLS_MIN,  // p.ej. 'TLSv1' (compat)
-          maxVersion: SQL_TLS_MAX   // p.ej. 'TLSv1.2'
+          minVersion: SQL_TLS_MIN,
+          maxVersion: SQL_TLS_MAX
         }
       }
     }).connect();
@@ -68,9 +65,7 @@ function parseFecha(s) {
   // Acepta "yyyy-MM-dd HH:mm:ss" o ISO "yyyy-MM-ddTHH:mm:ss"
   const iso = s.includes('T') ? s : s.replace(' ', 'T');
   const d = new Date(iso);
-  if (isNaN(d)) {
-    throw new Error('FECHA_HORA inválida. Usa ISO (2025-09-12T15:30:00) o "yyyy-MM-dd HH:mm:ss".');
-  }
+  if (isNaN(d)) throw new Error('FECHA_HORA inválida. Usa ISO (2025-09-12T15:30:00) o "yyyy-MM-dd HH:mm:ss".');
   return d;
 }
 
@@ -81,6 +76,28 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'coneccionQueryAstrid' });
+});
+
+app.get('/env-check', (req, res) => {
+  const view = (k) => {
+    const v = process.env[k];
+    return {
+      present: !!(v && String(v).trim() !== ''),
+      len: v ? String(v).length : 0,
+      sample: k === 'SQL_SERVER' && v ? String(v).slice(0, 20) : undefined
+    };
+  };
+  res.json({
+    SQL_SERVER: view('SQL_SERVER'),
+    SQL_DATABASE: view('SQL_DATABASE'),
+    SQL_USER: view('SQL_USER'),
+    SQL_PASSWORD: view('SQL_PASSWORD'),
+    SQL_ENCRYPT: view('SQL_ENCRYPT'),
+    SQL_TRUST_CERT: view('SQL_TRUST_CERT'),
+    SQL_TLS_MIN: view('SQL_TLS_MIN'),
+    SQL_TLS_MAX: view('SQL_TLS_MAX'),
+    API_KEY: view('API_KEY')
+  });
 });
 
 app.get('/db-health', async (req, res) => {
@@ -94,34 +111,18 @@ app.get('/db-health', async (req, res) => {
   }
 });
 
-// ===== Endpoint de depuración de variables =====
-app.get('/env-check', (req, res) => {
-  const keys = [
-    'SQL_SERVER','SQL_DATABASE','SQL_USER','SQL_PASSWORD',
-    'SQL_ENCRYPT','SQL_TRUST_CERT','SQL_TLS_MIN','SQL_TLS_MAX','API_KEY'
-  ];
-  const out = {};
-  for (const k of keys) {
-    const v = process.env[k];
-    out[k] = v
-      ? { present: true, len: String(v).length, sample: k === 'SQL_SERVER' ? String(v).slice(0, 20) : undefined }
-      : { present: false };
-  }
-  res.json(out);
-});
-
-// ===== Insert en dbo.Leads_Whatsapp =====
+// ===== Insert/Update (upsert) en dbo.Leads_Whatsapp =====
 // JSON esperado:
 // {
 //   "NUMERO_TELEFONO": "string <= 26" (requerido),
 //   "FECHA_HORA": "yyyy-MM-dd HH:mm:ss" o ISO con T (opcional),
 //   "PUSH_NAME": "string <= 510" (requerido),
 //   "NOMBRE_USUARIO": "string <= 255" (requerido),
-//   "TIPO_SALUDO": null | "string <= 100" (opcional; lo puedes omitir para que sea NULL)
+//   "TIPO_SALUDO": null | "string <= 100" (opcional; puedes omitir y será NULL)
 // }
 app.post('/whatsapp/leads/insert', async (req, res) => {
   try {
-    // Auth simple por API key (si no hay API_KEY definida, no valida: útil en local)
+    // Auth simple por API key (si no hay API_KEY definida, no valida: útil para local)
     const incomingKey = (req.headers['x-api-key'] || '').trim();
     const expectedKey = (API_KEY || '').trim();
     if (expectedKey && incomingKey !== expectedKey) {
@@ -134,7 +135,6 @@ app.post('/whatsapp/leads/insert', async (req, res) => {
     PUSH_NAME       = toStr(PUSH_NAME);
     NOMBRE_USUARIO  = toStr(NOMBRE_USUARIO);
 
-    // TIPO_SALUDO: opcional, a NULL si no viene
     if (TIPO_SALUDO !== null && TIPO_SALUDO !== undefined) {
       TIPO_SALUDO = toStr(TIPO_SALUDO) || null;
     } else {
@@ -156,11 +156,46 @@ app.post('/whatsapp/leads/insert', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'validation', details: errors });
     }
 
-    // Fecha
+    // ===== Fecha =====
     const fecha = parseFecha(FECHA_HORA);
 
-    // Insert parametrizado
+    // ===== Pool =====
     const pool = await getPool();
+
+    // ===== 1) ¿Ya existe ese número? =====
+    const sel = await pool.request()
+      .input('NUMERO_TELEFONO', sql.NVarChar(26), NUMERO_TELEFONO)
+      .query(`
+        SELECT TOP 1 ID
+        FROM dbo.Leads_Whatsapp
+        WHERE NUMERO_TELEFONO = @NUMERO_TELEFONO
+        ORDER BY ID DESC;
+      `);
+
+    if (sel.recordset.length) {
+      // Ya existe → actualiza datos y regresa el mismo ID
+      const existingId = sel.recordset[0].ID;
+
+      await pool.request()
+        .input('ID',             sql.Int,           existingId)
+        .input('FECHA_HORA',     sql.DateTime2,     fecha)
+        .input('PUSH_NAME',      sql.NVarChar(510), PUSH_NAME)
+        .input('NOMBRE_USUARIO', sql.VarChar(255),  NOMBRE_USUARIO)
+        .input('TIPO_SALUDO',    sql.NVarChar(100), TIPO_SALUDO) // puede ir null
+        .query(`
+          UPDATE dbo.Leads_Whatsapp
+          SET
+            FECHA_HORA = @FECHA_HORA,
+            PUSH_NAME = @PUSH_NAME,
+            NOMBRE_USUARIO = @NOMBRE_USUARIO,
+            TIPO_SALUDO = @TIPO_SALUDO
+          WHERE ID = @ID;
+        `);
+
+      return res.json({ ok: true, insertId: existingId, existed: true, action: 'updated' });
+    }
+
+    // ===== 2) No existe → inserta =====
     const result = await pool.request()
       .input('NUMERO_TELEFONO', sql.NVarChar(26),  NUMERO_TELEFONO)
       .input('FECHA_HORA',     sql.DateTime2,      fecha)
@@ -175,9 +210,10 @@ app.post('/whatsapp/leads/insert', async (req, res) => {
       `);
 
     const insertId = result.recordset?.[0]?.ID;
-    return res.json({ ok: true, insertId });
+    return res.json({ ok: true, insertId, existed: false, action: 'inserted' });
+
   } catch (err) {
-    console.error('Insert error:', err);
+    console.error('Insert/Upsert error:', err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -187,7 +223,6 @@ const listenPort = Number(process.env.PORT || 3000);
 const listenHost = '0.0.0.0'; // importante en Railway
 
 console.log('[BOOT] PORT env =', process.env.PORT);
-
 app.listen(listenPort, listenHost, () => {
   console.log(`[BOOT] API listening on http://${listenHost}:${listenPort}`);
 });
