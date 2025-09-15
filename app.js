@@ -10,16 +10,31 @@ app.use(express.json());
 // ===== Variables de entorno =====
 const {
   SQL_SERVER,                     // ej: "mi-servidor.database.windows.net" o IP
-  SQL_DATABASE = 'RPA',           // <— por defecto RPA
+  SQL_DATABASE = 'RPA',           // nombre de tu BD (por defecto RPA)
   SQL_USER,
   SQL_PASSWORD,
-  SQL_ENCRYPT = 'false',          // "true" para usar TLS (Azure lo requiere)
-  SQL_TRUST_CERT = 'true',        // on-prem sin CA: "true" | Azure: "false"
-  SQL_TLS_MIN = 'TLSv1',          // compatibilidad: 'TLSv1' | recomendado: 'TLSv1.2'
-  SQL_TLS_MAX = 'TLSv1.2',        // tope: 'TLSv1.2'
-  API_KEY,                        // clave del header x-api-key
-  PORT = 3000                     // no se usa directamente; Railway inyecta process.env.PORT
+  SQL_ENCRYPT = 'false',          // "true" si tu SQL requiere TLS
+  SQL_TRUST_CERT = 'true',        // on-prem sin CA pública: "true" (Azure suele ser "false")
+  SQL_TLS_MIN = 'TLSv1',          // compatibilidad mínima
+  SQL_TLS_MAX = 'TLSv1.2',        // tope
+  API_KEY,
+  PORT = 3000                     // solo por fallback local; en Railway se ignora
 } = process.env;
+
+// === Sanity-check de env (sin exponer secretos) ===
+[
+  'SQL_SERVER','SQL_DATABASE','SQL_USER','SQL_PASSWORD',
+  'SQL_ENCRYPT','SQL_TRUST_CERT','SQL_TLS_MIN','SQL_TLS_MAX','API_KEY'
+].forEach(k => {
+  const v = process.env[k];
+  if (!v || String(v).trim() === '') {
+    console.error('[ENV] Missing or empty:', k);
+  } else {
+    const len = String(v).length;
+    const sample = k === 'SQL_SERVER' ? String(v).slice(0, 20) : undefined;
+    console.log('[ENV] OK:', k, 'len=', len, sample ? `sample=${sample}` : '');
+  }
+});
 
 // ===== Pool SQL (lazy) =====
 let poolPromise = null;
@@ -35,7 +50,7 @@ function getPool() {
         trustServerCertificate: SQL_TRUST_CERT === 'true',
         // Compatibilidad TLS para servidores antiguos (evita ERR_SSL_UNSUPPORTED_PROTOCOL)
         cryptoCredentialsDetails: {
-          minVersion: SQL_TLS_MIN,  // p.ej. 'TLSv1' (compat), ideal 'TLSv1.2'
+          minVersion: SQL_TLS_MIN,  // p.ej. 'TLSv1' (compat)
           maxVersion: SQL_TLS_MAX   // p.ej. 'TLSv1.2'
         }
       }
@@ -59,10 +74,9 @@ function parseFecha(s) {
   return d;
 }
 
-
 // ===== Rutas básicas =====
 app.get('/', (req, res) => {
-  res.send('coneccionQueryAstrid API: ok. Usa /health, /db-health o POST /whatsapp/leads/insert');
+  res.send('coneccionQueryAstrid API: ok. Usa /health, /db-health, /env-check o POST /whatsapp/leads/insert');
 });
 
 app.get('/health', (req, res) => {
@@ -80,18 +94,20 @@ app.get('/db-health', async (req, res) => {
   }
 });
 
-// ===== Endpoint de depuración de variables (quitar en producción si quieres) =====
+// ===== Endpoint de depuración de variables =====
 app.get('/env-check', (req, res) => {
-  res.json({
-    SQL_SERVER: !!process.env.SQL_SERVER,
-    SQL_DATABASE: process.env.SQL_DATABASE,
-    SQL_USER: !!process.env.SQL_USER,
-    SQL_PASSWORD: !!process.env.SQL_PASSWORD,
-    SQL_ENCRYPT: process.env.SQL_ENCRYPT,
-    SQL_TRUST_CERT: process.env.SQL_TRUST_CERT,
-    SQL_TLS_MIN: process.env.SQL_TLS_MIN,
-    SQL_TLS_MAX: process.env.SQL_TLS_MAX
-  });
+  const keys = [
+    'SQL_SERVER','SQL_DATABASE','SQL_USER','SQL_PASSWORD',
+    'SQL_ENCRYPT','SQL_TRUST_CERT','SQL_TLS_MIN','SQL_TLS_MAX','API_KEY'
+  ];
+  const out = {};
+  for (const k of keys) {
+    const v = process.env[k];
+    out[k] = v
+      ? { present: true, len: String(v).length, sample: k === 'SQL_SERVER' ? String(v).slice(0, 20) : undefined }
+      : { present: false };
+  }
+  res.json(out);
 });
 
 // ===== Insert en dbo.Leads_Whatsapp =====
